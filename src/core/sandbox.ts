@@ -17,6 +17,7 @@ import { fork } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import type { SecurityConfig, ToolResult } from "./types.js";
+import { IS_WINDOWS, isPathAllowed, getSandboxTempDir } from "./platform.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -153,10 +154,21 @@ export class Sandbox {
   }
 
   private getSandboxedEnv(): Record<string, string> {
+    const tempDir = getSandboxTempDir();
     const env: Record<string, string> = {
       NODE_ENV: "sandbox",
-      HOME: "/tmp/myclaw-sandbox",
     };
+
+    if (IS_WINDOWS) {
+      env["USERPROFILE"] = tempDir;
+      env["TEMP"] = tempDir;
+      env["TMP"] = tempDir;
+      // Pass SystemRoot so Node.js can find system DLLs
+      if (process.env["SystemRoot"]) env["SystemRoot"] = process.env["SystemRoot"];
+      if (process.env["COMSPEC"]) env["COMSPEC"] = process.env["COMSPEC"];
+    } else {
+      env["HOME"] = tempDir;
+    }
 
     // Only pass through specific safe env vars
     if (this.config.networkAccess) {
@@ -167,13 +179,14 @@ export class Sandbox {
     return env;
   }
 
+  /**
+   * Validate that a path is within allowed paths.
+   * Cross-platform: handles Windows backslashes and case-insensitive drives.
+   */
   validatePath(path: string): boolean {
     if (!this.config.allowedPaths || this.config.allowedPaths.length === 0) {
       return true;
     }
-    const resolved = resolve(path);
-    return this.config.allowedPaths.some((allowed) =>
-      resolved.startsWith(resolve(allowed))
-    );
+    return isPathAllowed(path, this.config.allowedPaths);
   }
 }

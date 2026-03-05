@@ -61,6 +61,7 @@ export {
   AccessControl,
   RateLimiter,
   validateInstallation,
+  secureMyClaw,
 } from "./core/security.js";
 export type {
   AuditEntry,
@@ -85,6 +86,19 @@ export type { ScheduledTask } from "./agents/scheduler.js";
 // Built-in Plugins
 export { AnthropicPlugin } from "./plugins/models/anthropic.js";
 export { OpenAIPlugin } from "./plugins/models/openai.js";
+export { OpenRouterPlugin } from "./plugins/models/openrouter.js";
+
+// Platform
+export {
+  IS_WINDOWS,
+  IS_MACOS,
+  IS_LINUX,
+  isDangerousCommand,
+  isPathAllowed,
+  createSecuredFolder,
+  checkPermissions,
+  isRunningElevated,
+} from "./core/platform.js";
 export { TelegramPlugin } from "./plugins/channels/telegram.js";
 export { DiscordPlugin } from "./plugins/channels/discord.js";
 export { SlackPlugin } from "./plugins/channels/slack.js";

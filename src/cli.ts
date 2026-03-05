@@ -31,7 +31,9 @@ import { WorkflowToolPlugin } from "./plugins/tools/workflow.js";
 import { VoiceToolPlugin } from "./plugins/tools/voice.js";
 import { InsightsToolPlugin } from "./plugins/tools/insights.js";
 import { WhatsAppPlugin } from "./plugins/channels/whatsapp.js";
-import { validateInstallation } from "./core/security.js";
+import { validateInstallation, secureMyClaw } from "./core/security.js";
+import { OpenRouterPlugin } from "./plugins/models/openrouter.js";
+import { IS_WINDOWS, getPathSeparator } from "./core/platform.js";
 import { WebhookServer } from "./core/webhook.js";
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -98,10 +100,13 @@ Commands:
 Environment Variables:
   ANTHROPIC_API_KEY     Anthropic API key (required for Claude models)
   OPENAI_API_KEY        OpenAI API key (for GPT models)
+  OPENROUTER_API_KEY    OpenRouter API key (access 300+ models with one key)
   TELEGRAM_BOT_TOKEN    Telegram bot token
   DISCORD_BOT_TOKEN     Discord bot token
   SLACK_BOT_TOKEN       Slack bot token
   SLACK_APP_TOKEN       Slack app-level token (for Socket Mode)
+  WHATSAPP_TOKEN        WhatsApp Business Cloud API token
+  WHATSAPP_PHONE_ID     WhatsApp phone number ID
   MYCLAW_MODEL          Default model (default: anthropic/claude-sonnet-4-20250514)
   MYCLAW_CHEAP_MODEL    Model for smart routing (default: anthropic/claude-haiku-4-5-20251001)
   MYCLAW_SANDBOX        Sandbox mode: process, container, none (default: process)
@@ -112,6 +117,8 @@ Examples:
   myclaw chat                          Start interactive chat
   myclaw run "summarize my emails"     One-shot task
   myclaw start                         Start daemon mode
+  myclaw secure                        Audit security posture
+  myclaw secure --fix                  Auto-fix folder permissions
 `);
 }
 
@@ -277,16 +284,25 @@ async function startCommand(): Promise<void> {
 }
 
 async function secureCommand(): Promise<void> {
+  const args = process.argv.slice(2);
+  const shouldFix = args.includes("--fix");
   const config = await loadConfig();
   const dataDir = config.dataDir || ".myclaw";
 
-  console.log(`\nMyClaw v${VERSION} — Security Audit\n`);
+  console.log(`\nMyClaw v${VERSION} — Security Audit (${IS_WINDOWS ? "Windows" : process.platform})\n`);
+
+  // Auto-fix mode: lock down data directory
+  if (shouldFix) {
+    console.log("  Securing data directory...");
+    const result = secureMyClaw(dataDir);
+    console.log(`  ${result.success ? "[FIXED]" : "[ERROR]"} ${result.details}`);
+    console.log("");
+  }
 
   const report = await validateInstallation(dataDir);
 
   for (const check of report.checks) {
     const icon = check.passed ? "PASS" : (check.severity === "critical" ? "FAIL" : "WARN");
-    const color = check.passed ? "" : "";
     console.log(`  [${icon}] ${check.name}`);
     console.log(`        ${check.details}`);
   }
@@ -296,9 +312,13 @@ async function secureCommand(): Promise<void> {
     for (const rec of report.recommendations) {
       console.log(`  - ${rec}`);
     }
+    if (!shouldFix) {
+      console.log(`\n  Tip: Run "myclaw secure --fix" to auto-fix folder permissions`);
+    }
   }
 
   console.log(`\nSecurity config:`);
+  console.log(`  Platform: ${IS_WINDOWS ? "Windows" : process.platform}`);
   console.log(`  Sandbox mode: ${config.security.sandbox}`);
   console.log(`  Network access: ${config.security.networkAccess}`);
   console.log(`  Max execution time: ${config.security.maxExecutionTime}ms`);
@@ -317,6 +337,9 @@ async function registerDefaultPlugins(
   // Model providers
   await engine.registerPlugin(new AnthropicPlugin());
   await engine.registerPlugin(new OpenAIPlugin());
+  if (process.env["OPENROUTER_API_KEY"]) {
+    await engine.registerPlugin(new OpenRouterPlugin());
+  }
 
   // Tools
   await engine.registerPlugin(new ShellToolPlugin());

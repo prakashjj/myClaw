@@ -11,6 +11,7 @@
 import { readFile, access, constants } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { MyClawConfig, AgentConfig, SecurityConfig } from "../core/types.js";
+import { IS_WINDOWS, getPathSeparator } from "../core/platform.js";
 
 const DEFAULT_SECURITY: SecurityConfig = {
   sandbox: "process",
@@ -35,13 +36,17 @@ const DEFAULT_AGENT: AgentConfig = {
 };
 
 export async function loadConfig(configPath?: string): Promise<MyClawConfig> {
+  const homeDir = IS_WINDOWS
+    ? (process.env["USERPROFILE"] || process.env["APPDATA"] || "C:\\Users\\Default")
+    : (process.env["HOME"] || "~");
+
   const searchPaths = configPath
     ? [configPath]
     : [
         "myclaw.json",
         "myclaw.config.json",
         ".myclaw/config.json",
-        join(process.env["HOME"] || "~", ".myclaw/config.json"),
+        join(homeDir, ".myclaw/config.json"),
       ];
 
   for (const path of searchPaths) {
@@ -91,7 +96,7 @@ function configFromEnv(): MyClawConfig {
     security: {
       ...DEFAULT_SECURITY,
       sandbox,
-      allowedPaths: process.env["MYCLAW_ALLOWED_PATHS"]?.split(":") || [],
+      allowedPaths: process.env["MYCLAW_ALLOWED_PATHS"]?.split(getPathSeparator()) || [],
     },
     logging: {
       level: (process.env["MYCLAW_LOG_LEVEL"] as "debug" | "info" | "warn" | "error") || "info",

@@ -14,6 +14,7 @@ import type {
   ToolResult,
   PluginContext,
 } from "../../core/types.js";
+import { isDangerousCommand, isPathAllowed, IS_WINDOWS } from "../../core/platform.js";
 
 export class ShellToolPlugin implements ToolPlugin {
   name = "shell";
@@ -59,11 +60,9 @@ export class ShellToolPlugin implements ToolPlugin {
     const command = args["command"] as string;
     const cwd = (args["cwd"] as string) || process.cwd();
 
-    // Validate working directory
+    // Validate working directory (cross-platform)
     if (this.allowedPaths.length > 0) {
-      const resolvedCwd = resolve(cwd);
-      const allowed = this.allowedPaths.some((p) => resolvedCwd.startsWith(resolve(p)));
-      if (!allowed) {
+      if (!isPathAllowed(cwd, this.allowedPaths)) {
         return {
           success: false,
           output: "",
@@ -72,9 +71,8 @@ export class ShellToolPlugin implements ToolPlugin {
       }
     }
 
-    // Block dangerous commands
-    const blocked = ["rm -rf /", "mkfs", "dd if=", ":(){:|:&};:"];
-    if (blocked.some((b) => command.includes(b))) {
+    // Block dangerous commands (platform-aware: Unix + Windows)
+    if (isDangerousCommand(command)) {
       return { success: false, output: "", error: "Command blocked for safety" };
     }
 

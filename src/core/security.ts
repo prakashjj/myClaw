@@ -12,6 +12,7 @@
 import { appendFile, readFile, mkdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import { IS_WINDOWS, checkPermissions, isRunningElevated, createSecuredFolder } from "./platform.js";
 
 // ─── Audit Logging ──────────────────────────────────────────────────────────
 
@@ -383,36 +384,46 @@ export interface InstallationCheck {
 
 /**
  * Validates the security posture of a MyClaw installation.
+ * Works on Windows, macOS, and Linux.
  * Run this before starting in production.
  */
 export async function validateInstallation(dataDir: string): Promise<InstallationReport> {
   const checks: InstallationCheck[] = [];
   const recommendations: string[] = [];
 
-  // 1. Check data directory permissions
+  // 1. Check data directory permissions (cross-platform)
   try {
-    const { statSync } = await import("node:fs");
-    const stats = statSync(dataDir);
-    const mode = stats.mode & 0o777;
-    const isSecure = (mode & 0o077) === 0; // No group/other access
+    const { existsSync } = await import("node:fs");
+    if (existsSync(dataDir)) {
+      const permCheck = checkPermissions(dataDir);
+      checks.push({
+        name: "Data directory permissions",
+        passed: permCheck.isSecure,
+        details: permCheck.details,
+        severity: "critical",
+      });
 
-    checks.push({
-      name: "Data directory permissions",
-      passed: isSecure,
-      details: isSecure
-        ? `${dataDir} has restricted permissions (${mode.toString(8)})`
-        : `${dataDir} is world-readable (${mode.toString(8)}). Run: chmod 700 ${dataDir}`,
-      severity: "critical",
-    });
-
-    if (!isSecure) {
-      recommendations.push(`chmod 700 ${dataDir}`);
+      if (!permCheck.isSecure) {
+        if (IS_WINDOWS) {
+          recommendations.push(`Run: myclaw secure --fix   (locks down ${dataDir} with NTFS ACLs)`);
+        } else {
+          recommendations.push(`chmod 700 ${dataDir}`);
+        }
+      }
+    } else {
+      checks.push({
+        name: "Data directory permissions",
+        passed: false,
+        details: `${dataDir} does not exist. Run: myclaw init`,
+        severity: "critical",
+      });
+      recommendations.push("myclaw init");
     }
   } catch {
     checks.push({
       name: "Data directory permissions",
       passed: false,
-      details: `Cannot stat ${dataDir}`,
+      details: `Cannot check ${dataDir}`,
       severity: "critical",
     });
   }
@@ -424,7 +435,7 @@ export async function validateInstallation(dataDir: string): Promise<Installatio
     for (const configPath of configPaths) {
       if (existsSync(configPath)) {
         const content = readFileSync(configPath, "utf-8");
-        const hasKeys = /sk-ant-|sk-[a-z0-9]{20,}|xoxb-/i.test(content);
+        const hasKeys = /sk-ant-|sk-[a-z0-9]{20,}|xoxb-|sk-or-/i.test(content);
         checks.push({
           name: `No secrets in ${configPath}`,
           passed: !hasKeys,
@@ -453,24 +464,33 @@ export async function validateInstallation(dataDir: string): Promise<Installatio
     severity: nodeVersion >= 20 ? "info" : "critical",
   });
 
-  // 4. Check if running as root
-  const isRoot = process.getuid?.() === 0;
+  // 4. Check if running with elevated privileges (cross-platform)
+  const elevated = isRunningElevated();
   checks.push({
-    name: "Not running as root",
-    passed: !isRoot,
-    details: isRoot
-      ? "Running as root is dangerous. Create a dedicated myclaw user."
-      : "Running as non-root user (good)",
-    severity: isRoot ? "warning" : "info",
+    name: IS_WINDOWS ? "Not running as Administrator" : "Not running as root",
+    passed: !elevated,
+    details: elevated
+      ? IS_WINDOWS
+        ? "Running as Administrator is risky. Create a standard user for MyClaw."
+        : "Running as root is dangerous. Create a dedicated myclaw user."
+      : IS_WINDOWS
+        ? "Running as standard user (good)"
+        : "Running as non-root user (good)",
+    severity: elevated ? "warning" : "info",
   });
-  if (isRoot) {
-    recommendations.push("Create a dedicated 'myclaw' user: useradd -r -s /bin/false myclaw");
+  if (elevated) {
+    if (IS_WINDOWS) {
+      recommendations.push("Create a standard Windows user for running MyClaw");
+    } else {
+      recommendations.push("Create a dedicated 'myclaw' user: useradd -r -s /bin/false myclaw");
+    }
   }
 
-  // 5. Check sandbox availability
+  // 5. Check sandbox availability (cross-platform)
   try {
     const { execSync } = await import("node:child_process");
-    execSync("which docker", { stdio: "pipe" });
+    const dockerCmd = IS_WINDOWS ? "where docker" : "which docker";
+    execSync(dockerCmd, { stdio: "pipe" });
     checks.push({
       name: "Docker available for container sandbox",
       passed: true,
@@ -486,27 +506,37 @@ export async function validateInstallation(dataDir: string): Promise<Installatio
     });
   }
 
-  // 6. Check for .env file security
+  // 6. Check for .env file security (cross-platform)
   try {
-    const { existsSync, statSync: stat2 } = await import("node:fs");
+    const { existsSync } = await import("node:fs");
     if (existsSync(".env")) {
-      const envStats = stat2(".env");
-      const envMode = envStats.mode & 0o777;
-      const envSecure = (envMode & 0o077) === 0;
+      const envCheck = checkPermissions(".env");
       checks.push({
         name: ".env file permissions",
-        passed: envSecure,
-        details: envSecure
-          ? `.env has restricted permissions (${envMode.toString(8)})`
-          : `.env is readable by others (${envMode.toString(8)}). Run: chmod 600 .env`,
-        severity: envSecure ? "info" : "warning",
+        passed: envCheck.isSecure,
+        details: envCheck.details,
+        severity: envCheck.isSecure ? "info" : "warning",
       });
-      if (!envSecure) {
-        recommendations.push("chmod 600 .env");
+      if (!envCheck.isSecure) {
+        if (IS_WINDOWS) {
+          recommendations.push(`Restrict .env: icacls ".env" /inheritance:r /grant:r "%USERNAME%:F"`);
+        } else {
+          recommendations.push("chmod 600 .env");
+        }
       }
     }
   } catch {
     // No .env — that's fine
+  }
+
+  // 7. Windows-specific: Check Windows Defender exclusion recommendation
+  if (IS_WINDOWS) {
+    checks.push({
+      name: "Windows security note",
+      passed: true,
+      details: "Consider adding MyClaw data dir to Windows Defender exclusions for performance (optional)",
+      severity: "info",
+    });
   }
 
   const allCriticalPassed = checks
@@ -519,3 +549,14 @@ export async function validateInstallation(dataDir: string): Promise<Installatio
     recommendations,
   };
 }
+
+/**
+ * Lock down the MyClaw data directory with platform-appropriate permissions.
+ */
+export function secureMyClaw(dataDir: string): SecuredFolderResult {
+  return createSecuredFolder(dataDir);
+}
+
+// Re-export for convenience
+import type { SecuredFolderResult } from "./platform.js";
+export type { SecuredFolderResult };
