@@ -27,6 +27,7 @@ import type {
   Logger,
   MyClawEvent,
 } from "./types.js";
+import { AuditLogger, AccessControl, RateLimiter } from "./security.js";
 
 type EventHandler = (event: MyClawEvent) => void;
 
@@ -40,10 +41,31 @@ export class MyClawEngine {
   private eventHandlers: EventHandler[] = [];
   private logger: Logger;
 
+  // Security modules
+  private audit?: AuditLogger;
+  private accessControl?: AccessControl;
+  private rateLimiter?: RateLimiter;
+
   constructor(private config: MyClawConfig) {
     this.logger = this.createLogger();
     for (const agent of config.agents) {
       this.agents.set(agent.id, agent);
+    }
+
+    // Initialize security modules
+    if (config.security.auditLog) {
+      this.audit = new AuditLogger(config.dataDir || ".myclaw");
+      this.audit.init();
+    }
+    if (config.security.rbac?.enabled) {
+      const users = config.security.rbac.users?.map((u) => ({
+        userId: u.userId,
+        role: u.role,
+      }));
+      this.accessControl = new AccessControl(undefined, users);
+    }
+    if (config.security.rateLimiting?.enabled) {
+      this.rateLimiter = new RateLimiter(config.security.rateLimiting.windowMs);
     }
   }
 
@@ -76,6 +98,30 @@ export class MyClawEngine {
 
   private async handleIncoming(msg: IncomingMessage): Promise<void> {
     this.emit({ type: "message.received", data: msg });
+
+    // ─── Security Checks ──────────────────────────────────────────────────
+    // Rate limiting
+    if (this.rateLimiter) {
+      const limit = this.accessControl?.getRateLimit(msg.userId) ||
+        this.config.security.rateLimiting?.defaultLimit || 30;
+      const check = this.rateLimiter.check(msg.userId, limit);
+      if (!check.allowed) {
+        this.emit({ type: "security.rate_limited", data: { userId: msg.userId, retryAfterMs: check.retryAfterMs || 0 } });
+        this.audit?.log(msg.userId, "rate.limited", msg.channelId, "denied", { remaining: check.remaining });
+        this.logger.warn(`Rate limited user ${msg.userId} (retry in ${check.retryAfterMs}ms)`);
+        return;
+      }
+    }
+
+    // Channel access check
+    if (this.accessControl && !this.accessControl.canAccessChannel(msg.userId, msg.channelId)) {
+      this.emit({ type: "security.denied", data: { userId: msg.userId, action: "channel.access", reason: "Channel not allowed" } });
+      this.audit?.log(msg.userId, "auth.denied", msg.channelId, "denied", { reason: "channel access" });
+      return;
+    }
+
+    // Audit incoming message
+    this.audit?.log(msg.userId, "message.received", msg.channelId, "success", { text: msg.text.slice(0, 200) });
 
     const agent = this.resolveAgent(msg);
     if (!agent) {
@@ -206,10 +252,12 @@ export class MyClawEngine {
       // Check if agent is allowed to use this tool
       if (agent.allowedTools && !agent.allowedTools.includes(call.name)) {
         results.push(`Error: Agent "${agent.id}" is not allowed to use tool "${call.name}"`);
+        this.audit?.log(agent.id, "tool.denied", call.name, "denied", { reason: "agent allowedTools" });
         continue;
       }
 
       try {
+        this.audit?.log(agent.id, "tool.execute", call.name, "success", { args: call.args });
         const result = await toolPlugin.execute(call.name, call.args);
         results.push(result.success ? result.output : `Error: ${result.error}`);
       } catch (err) {
@@ -300,6 +348,9 @@ export class MyClawEngine {
         await plugin.destroy();
       }
     }
+    // Cleanup security modules
+    await this.audit?.destroy();
+    this.rateLimiter?.destroy();
     this.logger.info("MyClaw stopped.");
   }
 

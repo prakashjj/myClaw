@@ -220,6 +220,18 @@ export interface MyClawConfig {
   logging?: LogConfig;
   /** Data directory for persistence */
   dataDir?: string;
+  /** Webhook API server config */
+  webhook?: WebhookApiConfig;
+}
+
+export interface WebhookApiConfig {
+  enabled: boolean;
+  /** Port for the webhook API server (default: 3200) */
+  port?: number;
+  /** Bearer token for API authentication */
+  apiToken?: string;
+  /** CORS origin (e.g., "https://dashboard.example.com") */
+  corsOrigin?: string;
 }
 
 export interface SecurityConfig {
@@ -233,6 +245,26 @@ export interface SecurityConfig {
   maxExecutionTime: number;
   /** Max memory for sandboxed processes (MB) */
   maxMemoryMB: number;
+  /** Enable audit logging of all actions */
+  auditLog?: boolean;
+  /** Enable role-based access control */
+  rbac?: RBACConfig;
+  /** Rate limiting config */
+  rateLimiting?: RateLimitingConfig;
+}
+
+export interface RBACConfig {
+  enabled: boolean;
+  /** User-to-role mappings */
+  users?: Array<{ userId: string; role: "admin" | "operator" | "user" | "viewer" }>;
+}
+
+export interface RateLimitingConfig {
+  enabled: boolean;
+  /** Time window in milliseconds (default: 60000) */
+  windowMs?: number;
+  /** Default max requests per window (overridden by RBAC role limits) */
+  defaultLimit?: number;
 }
 
 export interface LogConfig {
@@ -257,4 +289,7 @@ export type MyClawEvent =
   | { type: "agent.response"; data: { agentId: string; content: string } }
   | { type: "agent.error"; data: { agentId: string; error: string } }
   | { type: "plugin.loaded"; data: { name: string } }
-  | { type: "plugin.error"; data: { name: string; error: string } };
+  | { type: "plugin.error"; data: { name: string; error: string } }
+  | { type: "security.denied"; data: { userId: string; action: string; reason: string } }
+  | { type: "security.rate_limited"; data: { userId: string; retryAfterMs: number } }
+  | { type: "security.violation"; data: { userId: string; type: string; details: string } };

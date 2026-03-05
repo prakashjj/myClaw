@@ -56,6 +56,25 @@ export {
 
 // Security
 export { Sandbox } from "./core/sandbox.js";
+export {
+  AuditLogger,
+  AccessControl,
+  RateLimiter,
+  validateInstallation,
+} from "./core/security.js";
+export type {
+  AuditEntry,
+  AuditAction,
+  Role,
+  Permission,
+  UserRecord,
+  InstallationReport,
+  InstallationCheck,
+} from "./core/security.js";
+
+// Webhook API
+export { WebhookServer } from "./core/webhook.js";
+export type { WebhookConfig } from "./core/webhook.js";
 
 // Agents
 export { AgentSwarm } from "./agents/swarm.js";
@@ -76,6 +95,9 @@ export { MemoryToolPlugin } from "./plugins/tools/memory.js";
 export { BrowserToolPlugin } from "./plugins/tools/browser.js";
 export { CodeInterpreterPlugin } from "./plugins/tools/codeinterpreter.js";
 export { WorkflowToolPlugin } from "./plugins/tools/workflow.js";
+export { VoiceToolPlugin } from "./plugins/tools/voice.js";
+export { InsightsToolPlugin } from "./plugins/tools/insights.js";
+export { WhatsAppPlugin } from "./plugins/channels/whatsapp.js";
 
 // Config
 export { loadConfig, generateDefaultConfig } from "./config/loader.js";

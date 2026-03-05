@@ -28,6 +28,11 @@ import { MemoryToolPlugin } from "./plugins/tools/memory.js";
 import { BrowserToolPlugin } from "./plugins/tools/browser.js";
 import { CodeInterpreterPlugin } from "./plugins/tools/codeinterpreter.js";
 import { WorkflowToolPlugin } from "./plugins/tools/workflow.js";
+import { VoiceToolPlugin } from "./plugins/tools/voice.js";
+import { InsightsToolPlugin } from "./plugins/tools/insights.js";
+import { WhatsAppPlugin } from "./plugins/channels/whatsapp.js";
+import { validateInstallation } from "./core/security.js";
+import { WebhookServer } from "./core/webhook.js";
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -53,6 +58,10 @@ async function main(): Promise<void> {
       break;
     case "start":
       await startCommand();
+      break;
+    case "secure":
+    case "security-check":
+      await secureCommand();
       break;
     case "version":
     case "--version":
@@ -82,6 +91,7 @@ Commands:
   chat           Interactive chat in the terminal
   run <prompt>   Run a one-shot agent task
   status         Show loaded plugins and agent status
+  secure         Run security audit of your installation
   version        Show version
   help           Show this help
 
@@ -266,6 +276,40 @@ async function startCommand(): Promise<void> {
   await new Promise(() => {});
 }
 
+async function secureCommand(): Promise<void> {
+  const config = await loadConfig();
+  const dataDir = config.dataDir || ".myclaw";
+
+  console.log(`\nMyClaw v${VERSION} — Security Audit\n`);
+
+  const report = await validateInstallation(dataDir);
+
+  for (const check of report.checks) {
+    const icon = check.passed ? "PASS" : (check.severity === "critical" ? "FAIL" : "WARN");
+    const color = check.passed ? "" : "";
+    console.log(`  [${icon}] ${check.name}`);
+    console.log(`        ${check.details}`);
+  }
+
+  if (report.recommendations.length > 0) {
+    console.log(`\nRecommended actions:`);
+    for (const rec of report.recommendations) {
+      console.log(`  - ${rec}`);
+    }
+  }
+
+  console.log(`\nSecurity config:`);
+  console.log(`  Sandbox mode: ${config.security.sandbox}`);
+  console.log(`  Network access: ${config.security.networkAccess}`);
+  console.log(`  Max execution time: ${config.security.maxExecutionTime}ms`);
+  console.log(`  Max memory: ${config.security.maxMemoryMB}MB`);
+  console.log(`  Audit logging: ${config.security.auditLog ? "enabled" : "disabled"}`);
+  console.log(`  RBAC: ${config.security.rbac?.enabled ? "enabled" : "disabled"}`);
+  console.log(`  Rate limiting: ${config.security.rateLimiting?.enabled ? "enabled" : "disabled"}`);
+
+  console.log(`\nOverall: ${report.secure ? "SECURE" : "ISSUES FOUND — review recommendations above"}\n`);
+}
+
 async function registerDefaultPlugins(
   engine: MyClawEngine,
   config: import("./core/types.js").MyClawConfig
@@ -281,6 +325,8 @@ async function registerDefaultPlugins(
   await engine.registerPlugin(new MemoryToolPlugin());
   await engine.registerPlugin(new CodeInterpreterPlugin());
   await engine.registerPlugin(new WorkflowToolPlugin());
+  await engine.registerPlugin(new VoiceToolPlugin());
+  await engine.registerPlugin(new InsightsToolPlugin());
 
   // Channels — only register if credentials are configured
   if (process.env["TELEGRAM_BOT_TOKEN"]) {
@@ -292,10 +338,26 @@ async function registerDefaultPlugins(
   if (process.env["SLACK_BOT_TOKEN"]) {
     await engine.registerPlugin(new SlackPlugin());
   }
+  if (process.env["WHATSAPP_TOKEN"]) {
+    await engine.registerPlugin(new WhatsAppPlugin());
+  }
 
   // Browser tools — only if Chrome is available
   if (process.env["CDP_PORT"]) {
     await engine.registerPlugin(new BrowserToolPlugin());
+  }
+
+  // Webhook API server
+  if (config.webhook?.enabled) {
+    const webhookServer = new WebhookServer(
+      {
+        port: config.webhook.port || 3200,
+        apiToken: config.webhook.apiToken || process.env["MYCLAW_API_TOKEN"] || "",
+        corsOrigin: config.webhook.corsOrigin,
+      },
+      { debug: () => {}, info: console.info, warn: console.warn, error: console.error }
+    );
+    await webhookServer.start();
   }
 }
 
