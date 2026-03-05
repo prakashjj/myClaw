@@ -22,11 +22,11 @@ const DEFAULT_SECURITY: SecurityConfig = {
 };
 
 const DEFAULT_MODEL = process.env["OPENROUTER_API_KEY"]
-  ? "openrouter/anthropic/claude-sonnet-4-20250514"
+  ? "openrouter/anthropic/claude-sonnet-4"
   : "anthropic/claude-sonnet-4-20250514";
 
 const DEFAULT_CHEAP_MODEL = process.env["OPENROUTER_API_KEY"]
-  ? "openrouter/anthropic/claude-haiku-4-5-20251001"
+  ? "openrouter/anthropic/claude-haiku-4.5"
   : "anthropic/claude-haiku-4-5-20251001";
 
 const DEFAULT_AGENT: AgentConfig = {

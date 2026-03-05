@@ -49,7 +49,7 @@ export class OpenRouterPlugin implements ModelPlugin {
   models: ModelInfo[] = [
     // Anthropic
     {
-      id: "anthropic/claude-sonnet-4-20250514",
+      id: "anthropic/claude-sonnet-4",
       name: "Claude Sonnet 4",
       contextWindow: 200_000,
       inputCostPerM: 3,
@@ -57,7 +57,7 @@ export class OpenRouterPlugin implements ModelPlugin {
       capabilities: ["chat", "vision", "tools", "code", "reasoning"],
     },
     {
-      id: "anthropic/claude-haiku-4-5-20251001",
+      id: "anthropic/claude-haiku-4.5",
       name: "Claude Haiku 4.5",
       contextWindow: 200_000,
       inputCostPerM: 0.8,
