@@ -4,15 +4,18 @@
  * UNIQUE FEATURE: Voice note processing for WhatsApp/Telegram.
  * No other claw variant handles voice messages natively.
  *
- * - Transcribe voice notes to text (via Whisper API or local Whisper)
+ * - Transcribe voice notes to text (via Whisper API, whisper CLI, or Windows Speech Recognition)
  * - Generate voice responses (text-to-speech)
+ * - Live voice conversation (bidirectional audio chat)
  * - Voice memo summarization
  * - Language detection from audio
  *
  * Works with:
  * - OpenAI Whisper API (cloud)
  * - Local Whisper via whisper.cpp (offline)
+ * - Windows Speech Recognition (offline, Windows-only)
  * - ElevenLabs / OpenAI TTS for speech synthesis
+ * - Local TTS (espeak, say, PowerShell) as fallback
  */
 
 import { execFile } from "node:child_process";
@@ -107,16 +110,57 @@ export class VoiceToolPlugin implements ToolPlugin {
     }
   }
 
+  // ─── Cross-platform command detection ────────────────────────────────────
+
+  private async commandExists(cmd: string): Promise<boolean> {
+    const os = platform();
+    try {
+      if (os === "win32") {
+        await execFileAsync("cmd", ["/c", "where", cmd]);
+      } else {
+        await execFileAsync("which", [cmd]);
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // ─── Transcription (STT) ────────────────────────────────────────────────
+
   private async transcribe(args: Record<string, unknown>): Promise<ToolResult> {
     const url = args["url"] as string;
     const language = args["language"] as string | undefined;
 
-    if (!this.openaiKey) {
-      return { success: false, output: "", error: "OPENAI_API_KEY not set (needed for Whisper)" };
+    // Try OpenAI Whisper API first
+    if (this.openaiKey) {
+      return this.transcribeWhisperAPI(url, language);
     }
 
+    // Try local whisper CLI (whisper.cpp / openai-whisper)
+    const whisperCmd = await this.findLocalWhisper();
+    if (whisperCmd) {
+      return this.transcribeLocalWhisper(whisperCmd, url, language);
+    }
+
+    // Windows fallback: built-in Speech Recognition
+    if (platform() === "win32") {
+      return this.transcribeWindowsSpeech(url);
+    }
+
+    return {
+      success: false,
+      output: "",
+      error: "No speech-to-text engine available. Options:\n" +
+        "  1. Set OPENAI_API_KEY for cloud Whisper\n" +
+        "  2. Install whisper.cpp: https://github.com/ggerganov/whisper.cpp\n" +
+        (platform() === "win32" ? "  3. Windows Speech Recognition should work but failed to initialize\n" : "") +
+        "  3. Install openai-whisper: pip install openai-whisper",
+    };
+  }
+
+  private async transcribeWhisperAPI(url: string, language?: string): Promise<ToolResult> {
     try {
-      // Fetch audio data
       const audioData = await this.fetchAudio(url);
 
       const formData = new FormData();
@@ -137,11 +181,91 @@ export class VoiceToolPlugin implements ToolPlugin {
       }
 
       const data = (await res.json()) as { text: string };
-      return { success: true, output: data.text, data: { text: data.text } };
+      return { success: true, output: data.text, data: { text: data.text, engine: "whisper-api" } };
     } catch (err) {
       return { success: false, output: "", error: `Transcription failed: ${err}` };
     }
   }
+
+  private async findLocalWhisper(): Promise<string | null> {
+    // whisper.cpp binary or python openai-whisper
+    for (const cmd of ["whisper", "whisper-cpp", "main"]) {
+      if (await this.commandExists(cmd)) {
+        return cmd;
+      }
+    }
+    return null;
+  }
+
+  private async transcribeLocalWhisper(cmd: string, audioPath: string, language?: string): Promise<ToolResult> {
+    try {
+      // Ensure we have a local file path
+      let localPath = audioPath;
+      if (audioPath.startsWith("http://") || audioPath.startsWith("https://")) {
+        const audioData = await this.fetchAudio(audioPath);
+        localPath = join(tmpdir(), `myclaw-whisper-input-${Date.now()}.wav`);
+        writeFileSync(localPath, audioData);
+      }
+
+      const args = [localPath, "--output-format", "txt"];
+      if (language) args.push("--language", language);
+
+      // whisper.cpp uses different flags
+      if (cmd === "main" || cmd === "whisper-cpp") {
+        const modelPath = process.env["WHISPER_MODEL_PATH"] || "";
+        const cppArgs = ["-f", localPath, "--no-timestamps"];
+        if (modelPath) cppArgs.push("-m", modelPath);
+        if (language) cppArgs.push("-l", language);
+
+        const result = await execFileAsync(cmd, cppArgs, { timeout: 60000 });
+        const text = result.stdout.trim();
+        return { success: true, output: text, data: { text, engine: "whisper-cpp" } };
+      }
+
+      // Python openai-whisper
+      const result = await execFileAsync(cmd, args, { timeout: 60000 });
+      const text = result.stdout.trim();
+      return { success: true, output: text, data: { text, engine: "whisper-local" } };
+    } catch (err) {
+      return { success: false, output: "", error: `Local whisper failed: ${err}` };
+    }
+  }
+
+  private async transcribeWindowsSpeech(audioPath: string): Promise<ToolResult> {
+    try {
+      // Ensure local file
+      let localPath = audioPath;
+      if (audioPath.startsWith("http://") || audioPath.startsWith("https://")) {
+        const audioData = await this.fetchAudio(audioPath);
+        localPath = join(tmpdir(), `myclaw-stt-input-${Date.now()}.wav`);
+        writeFileSync(localPath, audioData);
+      }
+
+      const psScript = `
+Add-Type -AssemblyName System.Speech
+$recognizer = New-Object System.Speech.Recognition.SpeechRecognitionEngine
+$recognizer.SetInputToWaveFile('${localPath.replace(/'/g, "''")}')
+$recognizer.LoadGrammar((New-Object System.Speech.Recognition.DictationGrammar))
+try {
+  $result = $recognizer.Recognize()
+  if ($result) { Write-Output $result.Text }
+  else { Write-Error 'No speech recognized' }
+} finally {
+  $recognizer.Dispose()
+}`;
+
+      const result = await execFileAsync("powershell", ["-NoProfile", "-Command", psScript], { timeout: 30000 });
+      const text = result.stdout.trim();
+      if (!text) {
+        return { success: false, output: "", error: "Windows Speech Recognition returned empty result" };
+      }
+      return { success: true, output: text, data: { text, engine: "windows-speech" } };
+    } catch (err) {
+      return { success: false, output: "", error: `Windows Speech Recognition failed: ${err}` };
+    }
+  }
+
+  // ─── Text-to-Speech (TTS) ──────────────────────────────────────────────
 
   private async synthesize(args: Record<string, unknown>): Promise<ToolResult> {
     const text = args["text"] as string;
@@ -244,6 +368,8 @@ $synth.Dispose();`;
     }
   }
 
+  // ─── Audio Playback ─────────────────────────────────────────────────────
+
   private async playAudio(filePath: string): Promise<void> {
     const os = platform();
     try {
@@ -271,24 +397,14 @@ $synth.Dispose();`;
 
   private async findAudioPlayer(): Promise<string | null> {
     for (const cmd of ["aplay", "paplay", "ffplay"]) {
-      try {
-        await execFileAsync("which", [cmd]);
-        return cmd;
-      } catch {
-        // not found
-      }
+      if (await this.commandExists(cmd)) return cmd;
     }
     return null;
   }
 
   private async findLocalTTS(): Promise<string | null> {
     for (const cmd of ["espeak-ng", "espeak"]) {
-      try {
-        await execFileAsync("which", [cmd]);
-        return cmd;
-      } catch {
-        // not found, try next
-      }
+      if (await this.commandExists(cmd)) return cmd;
     }
     return null;
   }
@@ -304,14 +420,19 @@ $synth.Dispose();`;
     try {
       const recorder = await this.findRecorder();
       if (!recorder) {
+        const tips = os === "win32"
+          ? "Install ffmpeg (winget install ffmpeg) or sox (winget install sox)."
+          : os === "darwin"
+            ? "Install sox (brew install sox) or ffmpeg (brew install ffmpeg)."
+            : "Install alsa-utils (apt install alsa-utils), sox, or ffmpeg.";
         return {
           success: false,
           output: "",
-          error: "No audio recorder found. Install one of: arecord (alsa-utils), sox (rec), ffmpeg, or use macOS (built-in).",
+          error: `No audio recorder found. ${tips}`,
         };
       }
 
-      this.log.info(`Recording from mic (max ${duration}s, silence stop: ${silenceThreshold}s)...`);
+      this.log.info(`Recording from mic using ${recorder} (max ${duration}s, silence stop: ${silenceThreshold}s)...`);
 
       if (recorder === "arecord") {
         // Linux ALSA — records WAV, stops after duration
@@ -327,13 +448,51 @@ $synth.Dispose();`;
           "silence", "1", "0.1", "1%", "1", String(silenceThreshold), "1%",
         ], { timeout: (duration + 5) * 1000 });
       } else if (recorder === "ffmpeg") {
-        const inputDevice = os === "darwin" ? "avfoundation" : "pulse";
-        const inputSource = os === "darwin" ? ":0" : "default";
+        // ffmpeg — platform-aware input device
+        let inputDevice: string;
+        let inputSource: string;
+        if (os === "darwin") {
+          inputDevice = "avfoundation";
+          inputSource = ":0";
+        } else if (os === "win32") {
+          inputDevice = "dshow";
+          inputSource = "audio=Microphone";
+        } else {
+          inputDevice = "pulse";
+          inputSource = "default";
+        }
         await execFileAsync("ffmpeg", [
           "-y", "-f", inputDevice, "-i", inputSource,
           "-t", String(duration), "-ar", "16000", "-ac", "1",
           "-loglevel", "error", outputPath,
         ], { timeout: (duration + 5) * 1000 });
+      } else if (recorder === "powershell-recorder") {
+        // Windows PowerShell fallback using NAudio-style recording via .NET
+        const psScript = `
+Add-Type -AssemblyName System.Speech
+$recognizer = New-Object System.Speech.Recognition.SpeechRecognitionEngine
+$recognizer.SetInputToDefaultAudioDevice()
+$grammar = New-Object System.Speech.Recognition.DictationGrammar
+$recognizer.LoadGrammar($grammar)
+$recognizer.InitialSilenceTimeout = [TimeSpan]::FromSeconds(${duration})
+$recognizer.EndSilenceTimeout = [TimeSpan]::FromSeconds(${silenceThreshold})
+try {
+  $result = $recognizer.Recognize([TimeSpan]::FromSeconds(${duration}))
+  if ($result) { Write-Output $result.Text }
+  else { Write-Error 'No speech detected' }
+} finally {
+  $recognizer.Dispose()
+}`;
+        // This special recorder skips WAV and directly returns text
+        const result = await execFileAsync("powershell", ["-NoProfile", "-Command", psScript], {
+          timeout: (duration + 5) * 1000,
+        });
+        const text = result.stdout.trim();
+        return {
+          success: !!text,
+          output: text || "No speech detected",
+          data: { directText: true, text, engine: "windows-speech" },
+        };
       }
 
       const { statSync } = await import("node:fs");
@@ -355,18 +514,21 @@ $synth.Dispose();`;
 
   private async findRecorder(): Promise<string | null> {
     const os = platform();
-    // On macOS, prefer sox (rec) or ffmpeg; on Linux, prefer arecord
-    const candidates = os === "darwin"
-      ? ["rec", "ffmpeg"]
-      : ["arecord", "rec", "ffmpeg"];
 
-    for (const cmd of candidates) {
-      try {
-        await execFileAsync("which", [cmd]);
-        return cmd;
-      } catch {
-        // not found
-      }
+    if (os === "win32") {
+      // Windows: prefer ffmpeg, then sox (rec), then PowerShell built-in
+      if (await this.commandExists("ffmpeg")) return "ffmpeg";
+      if (await this.commandExists("rec")) return "rec";
+      // PowerShell + System.Speech is always available on Windows
+      return "powershell-recorder";
+    } else if (os === "darwin") {
+      if (await this.commandExists("rec")) return "rec";
+      if (await this.commandExists("ffmpeg")) return "ffmpeg";
+    } else {
+      // Linux
+      if (await this.commandExists("arecord")) return "arecord";
+      if (await this.commandExists("rec")) return "rec";
+      if (await this.commandExists("ffmpeg")) return "ffmpeg";
     }
     return null;
   }
@@ -378,8 +540,20 @@ $synth.Dispose();`;
       return { success: false, output: "", error: "Voice chat requires engine integration (processMessage not available)." };
     }
 
-    if (!this.openaiKey) {
-      return { success: false, output: "", error: "Voice chat requires OPENAI_API_KEY for speech transcription (Whisper)." };
+    // Check that at least some form of STT is available
+    const hasSTT = this.openaiKey
+      || await this.findLocalWhisper()
+      || platform() === "win32";
+
+    if (!hasSTT) {
+      return {
+        success: false,
+        output: "",
+        error: "No speech-to-text engine available for voice chat. Options:\n" +
+          "  1. Set OPENAI_API_KEY for cloud Whisper\n" +
+          "  2. Install whisper.cpp: https://github.com/ggerganov/whisper.cpp\n" +
+          "  3. Install openai-whisper: pip install openai-whisper",
+      };
     }
 
     const voice = (args["voice"] as string) || "alloy";
@@ -406,17 +580,24 @@ $synth.Dispose();`;
           break;
         }
 
-        const audioPath = (recResult.data as { path: string }).path;
+        // Step 2: Transcribe — handle direct-text recorders (Windows Speech)
+        let userText: string;
+        const recData = recResult.data as Record<string, unknown>;
 
-        // Step 2: Transcribe
-        const transcription = await this.transcribe({ url: audioPath, language });
-        if (!transcription.success) {
-          this.log.warn(`Transcription failed: ${transcription.error}`);
-          console.log("[Voice Chat] Could not understand audio, try again...");
-          continue;
+        if (recData?.directText) {
+          // PowerShell recorder already returns text directly
+          userText = (recData.text as string || "").trim();
+        } else {
+          const audioPath = recData.path as string;
+          const transcription = await this.transcribe({ url: audioPath, language });
+          if (!transcription.success) {
+            this.log.warn(`Transcription failed: ${transcription.error}`);
+            console.log("[Voice Chat] Could not understand audio, try again...");
+            continue;
+          }
+          userText = transcription.output.trim();
         }
 
-        const userText = transcription.output.trim();
         if (!userText) {
           console.log("[Voice Chat] No speech detected, listening again...");
           continue;
@@ -428,7 +609,6 @@ $synth.Dispose();`;
         // Step 3: Check for stop words
         if (stopWords.some((w) => userText.toLowerCase().includes(w))) {
           console.log("[Voice Chat] Ending conversation. Goodbye!");
-          // Say goodbye via TTS
           await this.synthesize({ text: "Goodbye! It was nice talking with you.", voice });
           this.voiceChatActive = false;
           break;
@@ -457,11 +637,13 @@ $synth.Dispose();`;
     }
   }
 
+  // ─── Language Detection ─────────────────────────────────────────────────
+
   private async detectLanguage(args: Record<string, unknown>): Promise<ToolResult> {
     const url = args["url"] as string;
 
     if (!this.openaiKey) {
-      return { success: false, output: "", error: "OPENAI_API_KEY not set" };
+      return { success: false, output: "", error: "OPENAI_API_KEY not set (language detection requires Whisper API)" };
     }
 
     try {
@@ -493,6 +675,8 @@ $synth.Dispose();`;
       return { success: false, output: "", error: `Language detection failed: ${err}` };
     }
   }
+
+  // ─── Utilities ─────────────────────────────────────────────────────────
 
   private async fetchAudio(urlOrPath: string): Promise<Buffer> {
     if (urlOrPath.startsWith("http://") || urlOrPath.startsWith("https://")) {
