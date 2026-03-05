@@ -15,12 +15,20 @@
  * - ElevenLabs / OpenAI TTS for speech synthesis
  */
 
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir, platform } from "node:os";
+
 import type {
   ToolPlugin,
   ToolDefinition,
   ToolResult,
   PluginContext,
 } from "../../core/types.js";
+
+const execFileAsync = promisify(execFile);
 
 export class VoiceToolPlugin implements ToolPlugin {
   name = "voice";
@@ -117,10 +125,17 @@ export class VoiceToolPlugin implements ToolPlugin {
     const voice = (args["voice"] as string) || "alloy";
     const speed = (args["speed"] as number) || 1.0;
 
-    if (!this.openaiKey) {
-      return { success: false, output: "", error: "OPENAI_API_KEY not set (needed for TTS)" };
+    // Use OpenAI TTS if API key is available
+    if (this.openaiKey) {
+      return this.synthesizeOpenAI(text, voice, speed);
     }
 
+    // Fall back to local system TTS (free, no API key needed)
+    this.log.info("No OPENAI_API_KEY set — using local TTS fallback");
+    return this.synthesizeLocal(text, speed);
+  }
+
+  private async synthesizeOpenAI(text: string, voice: string, speed: number): Promise<ToolResult> {
     try {
       const res = await fetch("https://api.openai.com/v1/audio/speech", {
         method: "POST",
@@ -143,22 +158,75 @@ export class VoiceToolPlugin implements ToolPlugin {
       }
 
       const audioBuffer = Buffer.from(await res.arrayBuffer());
-
-      // Save to temp file
-      const { writeFileSync } = await import("node:fs");
-      const { join } = await import("node:path");
-      const { tmpdir } = await import("node:os");
       const outputPath = join(tmpdir(), `myclaw-tts-${Date.now()}.mp3`);
       writeFileSync(outputPath, audioBuffer);
 
       return {
         success: true,
-        output: `Audio generated: ${outputPath}`,
-        data: { path: outputPath, sizeBytes: audioBuffer.length },
+        output: `Audio generated (OpenAI TTS): ${outputPath}`,
+        data: { path: outputPath, sizeBytes: audioBuffer.length, engine: "openai" },
       };
     } catch (err) {
       return { success: false, output: "", error: `TTS failed: ${err}` };
     }
+  }
+
+  private async synthesizeLocal(text: string, speed: number): Promise<ToolResult> {
+    const outputPath = join(tmpdir(), `myclaw-tts-${Date.now()}.wav`);
+    const os = platform();
+
+    try {
+      if (os === "darwin") {
+        // macOS: built-in 'say' command
+        const rate = Math.round(175 * speed); // 175 WPM is default
+        await execFileAsync("say", ["-o", outputPath, "--data-format=LEI16@22050", "-r", String(rate), text]);
+      } else if (os === "win32") {
+        // Windows: PowerShell speech synthesis
+        const psScript = `
+Add-Type -AssemblyName System.Speech;
+$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer;
+$synth.Rate = [int](${Math.round((speed - 1) * 5)});
+$synth.SetOutputToWaveFile('${outputPath.replace(/'/g, "''")}');
+$synth.Speak('${text.replace(/'/g, "''")}');
+$synth.Dispose();`;
+        await execFileAsync("powershell", ["-NoProfile", "-Command", psScript]);
+      } else {
+        // Linux: try espeak-ng, then espeak
+        const ttsCmd = await this.findLocalTTS();
+        if (!ttsCmd) {
+          return {
+            success: false,
+            output: "",
+            error: "No TTS engine available. Install espeak-ng (`apt install espeak-ng`) or set OPENAI_API_KEY for cloud TTS.",
+          };
+        }
+        const wpm = Math.round(175 * speed);
+        await execFileAsync(ttsCmd, ["-w", outputPath, "-s", String(wpm), text]);
+      }
+
+      const { statSync } = await import("node:fs");
+      const sizeBytes = statSync(outputPath).size;
+
+      return {
+        success: true,
+        output: `Audio generated (local TTS): ${outputPath}`,
+        data: { path: outputPath, sizeBytes, engine: "local" },
+      };
+    } catch (err) {
+      return { success: false, output: "", error: `Local TTS failed: ${err}` };
+    }
+  }
+
+  private async findLocalTTS(): Promise<string | null> {
+    for (const cmd of ["espeak-ng", "espeak"]) {
+      try {
+        await execFileAsync("which", [cmd]);
+        return cmd;
+      } catch {
+        // not found, try next
+      }
+    }
+    return null;
   }
 
   private async detectLanguage(args: Record<string, unknown>): Promise<ToolResult> {
