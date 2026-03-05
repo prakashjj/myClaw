@@ -1,7 +1,7 @@
 {
   "name": "myclaw",
   "version": "1.0.0",
-  "description": "The superior AI agent platform. Tiny core, plugin architecture, security-first. Beats OpenClaw in modularity, PicoClaw in features, NanoClaw in flexibility, ZeroClaw in usability.",
+  "description": "The superior AI agent platform. Tiny core, plugin architecture, security-first.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -12,10 +12,14 @@
     "build": "tsc",
     "start": "node dist/cli.js",
     "dev": "tsx src/cli.ts",
+    "chat": "tsx src/cli.ts chat",
+    "setup": "npm install && npm run build",
+    "prepublishOnly": "npm run build",
+    "postinstall": "npm run build || true",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint src/",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "secure": "node dist/cli.js secure"
   },
   "keywords": [
     "ai",
@@ -24,22 +28,24 @@
     "claw",
     "llm",
     "chatbot",
-    "automation"
+    "automation",
+    "openrouter",
+    "whatsapp",
+    "telegram"
   ],
   "license": "MIT",
   "engines": {
     "node": ">=20"
   },
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
-    "openai": "^4.80.0",
-    "zod": "^3.24.0"
-  },
+  "files": [
+    "dist/**/*",
+    "README.md",
+    "LICENSE"
+  ],
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0",
     "tsx": "^4.19.0",
-    "vitest": "^3.0.0",
-    "eslint": "^9.0.0"
+    "vitest": "^3.0.0"
   }
 }

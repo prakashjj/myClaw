@@ -108,46 +108,126 @@ Validates your installation:
 - **TypeScript** — Full type safety, largest developer ecosystem
 - **Zero required dependencies** — Uses Node.js built-ins (fetch, WebSocket, vm, child_process)
 
-## Quick Start
+## Installation
+
+### Option 1: One-Line Install (Linux / macOS)
 
 ```bash
-# Install
-npm install -g myclaw
+curl -fsSL https://raw.githubusercontent.com/prakashjj/myClaw/main/setup.sh | bash
+```
 
-# Initialize config
+This clones the repo, installs dependencies, builds, links the `myclaw` command, and locks down the data directory.
+
+### Option 2: One-Line Install (Windows PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/prakashjj/myClaw/main/setup.ps1 | iex
+```
+
+Same as above but also secures the data folder with NTFS ACLs (only your user can access it).
+
+### Option 3: Clone and Build
+
+```bash
+# Clone
+git clone https://github.com/prakashjj/myClaw.git
+cd myClaw
+
+# Install deps + build (one command)
+npm run setup
+
+# Link the "myclaw" command globally
+npm link
+```
+
+### Option 4: npx (No Install)
+
+```bash
+# Run directly without installing globally
+npx myclaw chat
+npx myclaw init
+```
+
+### Option 5: As a Library (in Your Own Project)
+
+```bash
+npm install myclaw
+```
+
+```typescript
+import { MyClawEngine, AnthropicPlugin, ShellToolPlugin } from "myclaw";
+```
+
+### After Installation
+
+```bash
+# 1. Set your API key (pick ONE — any works)
+export ANTHROPIC_API_KEY=sk-ant-...     # Direct Anthropic
+export OPENROUTER_API_KEY=sk-or-...     # OpenRouter (300+ models)
+export OPENAI_API_KEY=sk-...            # Direct OpenAI
+
+# 2. Generate config file
 myclaw init
 
-# Run security audit
+# 3. Run security audit
 myclaw secure
 
-# Set your API key
-export ANTHROPIC_API_KEY=sk-ant-...
-
-# Start chatting
+# 4. Start chatting
 myclaw chat
 ```
 
 **Setup time: ~60 seconds** (vs OpenClaw's 45 minutes)
 
+### Prerequisites
+
+- **Node.js 20+** — [download here](https://nodejs.org)
+- **git** — only needed for clone-based install
+- No Docker required. No Rust. No Python. Just Node.
+
 ## Secure Installation
 
-MyClaw can run in a fully sandboxed environment. Here's the recommended production setup:
+MyClaw can run in a fully sandboxed environment. Here's the recommended production setup.
+
+### Linux / macOS
 
 ```bash
 # 1. Create a dedicated user (don't run as root)
-sudo useradd -r -m -s /bin/false myclaw
-sudo su - myclaw -s /bin/bash
+sudo useradd -r -m -s /bin/bash myclaw
+sudo su - myclaw
 
-# 2. Install and init
-npm install -g myclaw
+# 2. Clone and build
+git clone https://github.com/prakashjj/myClaw.git && cd myClaw
+npm run setup
+
+# 3. Init and auto-lock permissions
 myclaw init
+myclaw secure --fix    # chmod 700 .myclaw automatically
 
-# 3. Lock down permissions
-chmod 700 .myclaw
+# 4. Lock .env file
 chmod 600 .env
-
-# 4. Enable all security features in myclaw.json
 ```
+
+### Windows (Secured Folder)
+
+```powershell
+# 1. Open PowerShell (standard user — NOT Administrator)
+# 2. Clone and build
+git clone https://github.com/prakashjj/myClaw.git; cd myClaw
+npm run setup
+
+# 3. Init and auto-lock with NTFS ACLs
+myclaw init
+myclaw secure --fix    # Removes inheritance, only your user + SYSTEM get access
+
+# 4. Verify
+myclaw secure
+```
+
+The `myclaw secure --fix` command on Windows:
+- Removes inherited permissions from `.myclaw/` (`icacls /inheritance:r`)
+- Grants access only to the current user and SYSTEM
+- No other user accounts can read, write, or list the directory
+- No admin/elevated privileges needed
 
 ```json
 {
