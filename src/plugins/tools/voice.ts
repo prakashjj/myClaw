@@ -456,7 +456,7 @@ $synth.Dispose();`;
           inputSource = ":0";
         } else if (os === "win32") {
           inputDevice = "dshow";
-          inputSource = "audio=Microphone";
+          inputSource = await this.detectDshowAudioDevice();
         } else {
           inputDevice = "pulse";
           inputSource = "default";
@@ -516,10 +516,8 @@ try {
     const os = platform();
 
     if (os === "win32") {
-      // Windows: prefer ffmpeg, then sox (rec), then PowerShell built-in
-      if (await this.commandExists("ffmpeg")) return "ffmpeg";
-      if (await this.commandExists("rec")) return "rec";
-      // PowerShell + System.Speech is always available on Windows
+      // Windows: prefer PowerShell (always works, no device name needed),
+      // then sox, then ffmpeg (dshow needs exact device name detection)
       return "powershell-recorder";
     } else if (os === "darwin") {
       if (await this.commandExists("rec")) return "rec";
@@ -531,6 +529,30 @@ try {
       if (await this.commandExists("ffmpeg")) return "ffmpeg";
     }
     return null;
+  }
+
+  /**
+   * Auto-detect the first audio input device for ffmpeg dshow on Windows.
+   * Parses `ffmpeg -list_devices true -f dshow -i dummy` output.
+   */
+  private async detectDshowAudioDevice(): Promise<string> {
+    try {
+      // ffmpeg prints device list to stderr and exits with error code
+      const result = await execFileAsync("ffmpeg", [
+        "-list_devices", "true", "-f", "dshow", "-i", "dummy",
+      ], { timeout: 5000 }).catch((err: { stderr?: string }) => ({ stdout: "", stderr: err.stderr || "" }));
+
+      const output = (result as { stderr?: string }).stderr || "";
+      // Look for lines like: [dshow] "Microphone (Realtek Audio)" (audio)
+      const audioMatch = output.match(/\] "([^"]+)" \(audio\)/);
+      if (audioMatch) {
+        return `audio=${audioMatch[1]}`;
+      }
+    } catch {
+      // fallback below
+    }
+    // Last resort: generic name
+    return "audio=Microphone";
   }
 
   // ─── Live Voice Conversation ─────────────────────────────────────────────
