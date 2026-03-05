@@ -161,9 +161,11 @@ export class VoiceToolPlugin implements ToolPlugin {
       const outputPath = join(tmpdir(), `myclaw-tts-${Date.now()}.mp3`);
       writeFileSync(outputPath, audioBuffer);
 
+      await this.playAudio(outputPath);
+
       return {
         success: true,
-        output: `Audio generated (OpenAI TTS): ${outputPath}`,
+        output: `Audio generated and played (OpenAI TTS): ${outputPath}`,
         data: { path: outputPath, sizeBytes: audioBuffer.length, engine: "openai" },
       };
     } catch (err) {
@@ -207,14 +209,53 @@ $synth.Dispose();`;
       const { statSync } = await import("node:fs");
       const sizeBytes = statSync(outputPath).size;
 
+      await this.playAudio(outputPath);
+
       return {
         success: true,
-        output: `Audio generated (local TTS): ${outputPath}`,
+        output: `Audio generated and played (local TTS): ${outputPath}`,
         data: { path: outputPath, sizeBytes, engine: "local" },
       };
     } catch (err) {
       return { success: false, output: "", error: `Local TTS failed: ${err}` };
     }
+  }
+
+  private async playAudio(filePath: string): Promise<void> {
+    const os = platform();
+    try {
+      if (os === "darwin") {
+        await execFileAsync("afplay", [filePath]);
+      } else if (os === "win32") {
+        // PowerShell can play audio via .NET
+        await execFileAsync("powershell", [
+          "-NoProfile", "-Command",
+          `(New-Object Media.SoundPlayer '${filePath.replace(/'/g, "''")}').PlaySync()`,
+        ]);
+      } else {
+        // Linux: try common audio players in order
+        const player = await this.findAudioPlayer();
+        if (player) {
+          await execFileAsync(player, player === "paplay" ? [filePath] : ["-q", filePath]);
+        } else {
+          this.log.warn("No audio player found — file saved but cannot auto-play. Install aplay, paplay, or ffplay.");
+        }
+      }
+    } catch (err) {
+      this.log.warn(`Auto-play failed: ${err}`);
+    }
+  }
+
+  private async findAudioPlayer(): Promise<string | null> {
+    for (const cmd of ["aplay", "paplay", "ffplay"]) {
+      try {
+        await execFileAsync("which", [cmd]);
+        return cmd;
+      } catch {
+        // not found
+      }
+    }
+    return null;
   }
 
   private async findLocalTTS(): Promise<string | null> {
