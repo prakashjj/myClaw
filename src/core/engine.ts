@@ -434,6 +434,18 @@ export class MyClawEngine {
     }
   }
 
+  /**
+   * Execute a tool directly by name, bypassing the agent loop.
+   * Useful for CLI commands that need to invoke a specific tool reliably.
+   */
+  async executeTool(toolName: string, args: Record<string, unknown>): Promise<import("./types.js").ToolResult> {
+    const toolPlugin = this.findToolByName(toolName);
+    if (!toolPlugin) {
+      return { success: false, output: "", error: `Tool "${toolName}" not found` };
+    }
+    return toolPlugin.execute(toolName, args);
+  }
+
   getStatus(): { plugins: string[]; agents: string[]; channels: string[]; tools: string[] } {
     return {
       plugins: [...this.plugins.keys()],

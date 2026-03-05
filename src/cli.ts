@@ -206,13 +206,14 @@ async function voiceCommand(): Promise<void> {
   console.log(`\nMyClaw v${VERSION} — Voice Conversation`);
   console.log(`Speak into your microphone. Say "stop" or "goodbye" to end.\n`);
 
-  // Trigger the voice_chat tool directly
-  const response = await engine.processMessage(
-    "Start a voice conversation with me. Use the voice_chat tool now.",
-    "voice-user",
-    "voice-chat"
-  );
-  console.log(response);
+  // Invoke the voice_chat tool directly — don't rely on the agent deciding to call it
+  const result = await engine.executeTool("voice_chat", {
+    voice: "alloy",
+  });
+
+  if (!result.success) {
+    console.error(`Voice chat error: ${result.error}`);
+  }
 
   await engine.shutdown();
 }
