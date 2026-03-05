@@ -1,0 +1,21 @@
+image: gitpod/workspace-node
+
+tasks:
+  - name: Setup
+    init: npm install && npm run build && node dist/cli.js init
+    command: echo "MyClaw ready. Run 'npm run dev' or 'node dist/cli.js chat'"
+
+vscode:
+  extensions:
+    - dbaeumer.vscode-eslint
+    - esbenp.prettier-vscode
+
+ports:
+  - port: 3200
+    onOpen: notify
+    name: Webhook API
+    visibility: private
+  - port: 3100
+    onOpen: notify
+    name: WhatsApp Webhook
+    visibility: private

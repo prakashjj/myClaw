@@ -272,6 +272,46 @@ For maximum isolation, use container sandbox mode:
 }
 ```
 
+## Git Workspaces
+
+MyClaw works out-of-the-box on cloud development environments.
+
+### GitHub Codespaces
+
+1. Open the repo in Codespaces (click **Code → Codespaces → New codespace**)
+2. The dev container auto-installs dependencies, builds, and initializes config
+3. Set your API key:
+   ```bash
+   export OPENROUTER_API_KEY=sk-or-...
+   ```
+4. Start chatting:
+   ```bash
+   myclaw chat
+   ```
+
+Ports 3200 (webhook API) and 3100 (WhatsApp webhook) are auto-forwarded.
+
+### Gitpod
+
+[![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/prakashjj/myClaw)
+
+1. Click the button above (or prefix the repo URL with `gitpod.io/#`)
+2. Gitpod runs `npm install && npm run build && node dist/cli.js init` automatically
+3. Set your API key and start chatting
+
+### VS Code Dev Containers
+
+1. Install the **Dev Containers** extension
+2. Clone the repo and open it in VS Code
+3. Click **Reopen in Container** when prompted
+4. Same auto-setup as Codespaces
+
+### GitHub Actions CI
+
+The repo includes a CI workflow (`.github/workflows/ci.yml`) that runs on every push and PR:
+- **Matrix:** Ubuntu + Windows, Node.js 20 + 22
+- **Steps:** Typecheck → Build → Test
+
 ## Commands
 
 ```bash
