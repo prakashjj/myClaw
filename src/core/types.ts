@@ -40,6 +40,8 @@ export interface PluginContext {
   emit: (event: string, data: unknown) => void;
   log: Logger;
   getPlugin: <T extends Plugin>(name: string) => T | undefined;
+  /** Process a message through the agent loop (for tools that need agent responses, e.g. voice chat) */
+  processMessage?: (text: string, userId?: string, channelId?: string) => Promise<string>;
 }
 
 // ─── Channels (messaging platforms) ─────────────────────────────────────────

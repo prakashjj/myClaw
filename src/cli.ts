@@ -52,6 +52,9 @@ async function main(): Promise<void> {
     case "chat":
       await chatCommand();
       break;
+    case "voice":
+      await voiceCommand();
+      break;
     case "run":
       await runCommand(args.slice(1).join(" "));
       break;
@@ -91,6 +94,7 @@ Commands:
   start          Start MyClaw daemon (listens on configured channels)
   init           Generate a default config file
   chat           Interactive chat in the terminal
+  voice          Start a live voice conversation (speak & listen)
   run <prompt>   Run a one-shot agent task
   status         Show loaded plugins and agent status
   secure         Run security audit of your installation
@@ -191,6 +195,26 @@ async function chatCommand(): Promise<void> {
     await engine.shutdown();
     process.exit(0);
   });
+}
+
+async function voiceCommand(): Promise<void> {
+  const config = await loadConfig();
+  const engine = new MyClawEngine(config);
+
+  await registerDefaultPlugins(engine, config);
+
+  console.log(`\nMyClaw v${VERSION} — Voice Conversation`);
+  console.log(`Speak into your microphone. Say "stop" or "goodbye" to end.\n`);
+
+  // Trigger the voice_chat tool directly
+  const response = await engine.processMessage(
+    "Start a voice conversation with me. Use the voice_chat tool now.",
+    "voice-user",
+    "voice-chat"
+  );
+  console.log(response);
+
+  await engine.shutdown();
 }
 
 async function runCommand(prompt: string): Promise<void> {

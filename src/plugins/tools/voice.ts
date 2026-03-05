@@ -34,10 +34,12 @@ export class VoiceToolPlugin implements ToolPlugin {
   name = "voice";
   version = "1.0.0";
   type = "tool" as const;
-  description = "Voice transcription, synthesis, and processing";
+  description = "Voice transcription, synthesis, conversation, and processing";
 
   private openaiKey = "";
   private log!: PluginContext["log"];
+  private processMessage?: PluginContext["processMessage"];
+  private voiceChatActive = false;
 
   tools: ToolDefinition[] = [
     {
@@ -58,6 +60,22 @@ export class VoiceToolPlugin implements ToolPlugin {
       },
     },
     {
+      name: "record_audio",
+      description: "Record audio from the microphone with automatic silence detection",
+      parameters: {
+        duration: { type: "number", description: "Max recording duration in seconds (default: 10)", required: false },
+        silence_threshold: { type: "number", description: "Silence duration in seconds to auto-stop (default: 2)", required: false },
+      },
+    },
+    {
+      name: "voice_chat",
+      description: "Start a live voice conversation. Listens on mic, transcribes speech, sends to the agent, and speaks the response. Say 'stop', 'exit', or 'goodbye' to end.",
+      parameters: {
+        voice: { type: "string", description: "TTS voice: alloy, echo, fable, onyx, nova, shimmer", required: false },
+        language: { type: "string", description: "Language hint for transcription (e.g., 'en', 'es')", required: false },
+      },
+    },
+    {
       name: "detect_language",
       description: "Detect the language spoken in an audio file",
       parameters: {
@@ -69,6 +87,7 @@ export class VoiceToolPlugin implements ToolPlugin {
   async init(ctx: PluginContext): Promise<void> {
     this.openaiKey = process.env["OPENAI_API_KEY"] || "";
     this.log = ctx.log;
+    this.processMessage = ctx.processMessage;
   }
 
   async execute(toolName: string, args: Record<string, unknown>): Promise<ToolResult> {
@@ -77,6 +96,10 @@ export class VoiceToolPlugin implements ToolPlugin {
         return this.transcribe(args);
       case "text_to_speech":
         return this.synthesize(args);
+      case "record_audio":
+        return this.recordAudio(args);
+      case "voice_chat":
+        return this.voiceChat(args);
       case "detect_language":
         return this.detectLanguage(args);
       default:
@@ -268,6 +291,170 @@ $synth.Dispose();`;
       }
     }
     return null;
+  }
+
+  // ─── Microphone Recording ──────────────────────────────────────────────
+
+  private async recordAudio(args: Record<string, unknown>): Promise<ToolResult> {
+    const duration = (args["duration"] as number) || 10;
+    const silenceThreshold = (args["silence_threshold"] as number) || 2;
+    const outputPath = join(tmpdir(), `myclaw-rec-${Date.now()}.wav`);
+    const os = platform();
+
+    try {
+      const recorder = await this.findRecorder();
+      if (!recorder) {
+        return {
+          success: false,
+          output: "",
+          error: "No audio recorder found. Install one of: arecord (alsa-utils), sox (rec), ffmpeg, or use macOS (built-in).",
+        };
+      }
+
+      this.log.info(`Recording from mic (max ${duration}s, silence stop: ${silenceThreshold}s)...`);
+
+      if (recorder === "arecord") {
+        // Linux ALSA — records WAV, stops after duration
+        await execFileAsync("arecord", [
+          "-f", "cd", "-t", "wav", "-d", String(duration),
+          "-q", outputPath,
+        ], { timeout: (duration + 2) * 1000 });
+      } else if (recorder === "rec") {
+        // SoX — has built-in silence detection
+        await execFileAsync("rec", [
+          outputPath, "rate", "16k", "channels", "1",
+          "trim", "0", String(duration),
+          "silence", "1", "0.1", "1%", "1", String(silenceThreshold), "1%",
+        ], { timeout: (duration + 5) * 1000 });
+      } else if (recorder === "ffmpeg") {
+        const inputDevice = os === "darwin" ? "avfoundation" : "pulse";
+        const inputSource = os === "darwin" ? ":0" : "default";
+        await execFileAsync("ffmpeg", [
+          "-y", "-f", inputDevice, "-i", inputSource,
+          "-t", String(duration), "-ar", "16000", "-ac", "1",
+          "-loglevel", "error", outputPath,
+        ], { timeout: (duration + 5) * 1000 });
+      }
+
+      const { statSync } = await import("node:fs");
+      const sizeBytes = statSync(outputPath).size;
+
+      if (sizeBytes < 1000) {
+        return { success: false, output: "", error: "Recording too short or empty — check your microphone." };
+      }
+
+      return {
+        success: true,
+        output: `Recorded audio: ${outputPath} (${(sizeBytes / 1024).toFixed(1)} KB)`,
+        data: { path: outputPath, sizeBytes, durationMax: duration },
+      };
+    } catch (err) {
+      return { success: false, output: "", error: `Recording failed: ${err}` };
+    }
+  }
+
+  private async findRecorder(): Promise<string | null> {
+    const os = platform();
+    // On macOS, prefer sox (rec) or ffmpeg; on Linux, prefer arecord
+    const candidates = os === "darwin"
+      ? ["rec", "ffmpeg"]
+      : ["arecord", "rec", "ffmpeg"];
+
+    for (const cmd of candidates) {
+      try {
+        await execFileAsync("which", [cmd]);
+        return cmd;
+      } catch {
+        // not found
+      }
+    }
+    return null;
+  }
+
+  // ─── Live Voice Conversation ─────────────────────────────────────────────
+
+  private async voiceChat(args: Record<string, unknown>): Promise<ToolResult> {
+    if (!this.processMessage) {
+      return { success: false, output: "", error: "Voice chat requires engine integration (processMessage not available)." };
+    }
+
+    if (!this.openaiKey) {
+      return { success: false, output: "", error: "Voice chat requires OPENAI_API_KEY for speech transcription (Whisper)." };
+    }
+
+    const voice = (args["voice"] as string) || "alloy";
+    const language = args["language"] as string | undefined;
+    const stopWords = ["stop", "exit", "goodbye", "quit", "bye", "end conversation"];
+
+    this.voiceChatActive = true;
+    const transcript: Array<{ role: string; text: string }> = [];
+    let turns = 0;
+    const maxTurns = 50;
+
+    this.log.info("Voice chat started — speak into your microphone. Say 'stop' or 'goodbye' to end.");
+    console.log("\n[Voice Chat] Listening... (say 'stop' or 'goodbye' to end)\n");
+
+    try {
+      while (this.voiceChatActive && turns < maxTurns) {
+        turns++;
+
+        // Step 1: Record from mic
+        const recResult = await this.recordAudio({ duration: 15, silence_threshold: 2 });
+        if (!recResult.success) {
+          this.log.warn(`Recording failed: ${recResult.error}`);
+          console.log(`[Voice Chat] Could not record: ${recResult.error}`);
+          break;
+        }
+
+        const audioPath = (recResult.data as { path: string }).path;
+
+        // Step 2: Transcribe
+        const transcription = await this.transcribe({ url: audioPath, language });
+        if (!transcription.success) {
+          this.log.warn(`Transcription failed: ${transcription.error}`);
+          console.log("[Voice Chat] Could not understand audio, try again...");
+          continue;
+        }
+
+        const userText = transcription.output.trim();
+        if (!userText) {
+          console.log("[Voice Chat] No speech detected, listening again...");
+          continue;
+        }
+
+        console.log(`[You] ${userText}`);
+        transcript.push({ role: "user", text: userText });
+
+        // Step 3: Check for stop words
+        if (stopWords.some((w) => userText.toLowerCase().includes(w))) {
+          console.log("[Voice Chat] Ending conversation. Goodbye!");
+          // Say goodbye via TTS
+          await this.synthesize({ text: "Goodbye! It was nice talking with you.", voice });
+          this.voiceChatActive = false;
+          break;
+        }
+
+        // Step 4: Get agent response
+        const response = await this.processMessage(userText, "voice-user", "voice-chat");
+
+        console.log(`[MyClaw] ${response}`);
+        transcript.push({ role: "assistant", text: response });
+
+        // Step 5: Speak the response
+        await this.synthesize({ text: response, voice });
+      }
+
+      return {
+        success: true,
+        output: `Voice conversation ended after ${turns} turn(s).`,
+        data: { turns, transcript },
+      };
+    } catch (err) {
+      this.voiceChatActive = false;
+      return { success: false, output: "", error: `Voice chat error: ${err}` };
+    } finally {
+      this.voiceChatActive = false;
+    }
   }
 
   private async detectLanguage(args: Record<string, unknown>): Promise<ToolResult> {

@@ -363,6 +363,8 @@ export class MyClawEngine {
         this.emit({ type: event, data } as MyClawEvent),
       log: this.logger,
       getPlugin: <T extends Plugin>(name: string) => this.plugins.get(name) as T | undefined,
+      processMessage: (text: string, userId?: string, channelId?: string) =>
+        this.processMessage(text, userId, channelId),
     };
   }
 
