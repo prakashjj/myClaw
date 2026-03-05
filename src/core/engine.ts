@@ -382,6 +382,56 @@ export class MyClawEngine {
     };
   }
 
+  /**
+   * Process a message directly (for CLI / programmatic use).
+   * Unlike handleIncoming(), this is public and returns the response text.
+   */
+  async processMessage(text: string, userId = "cli-user", channelId = "cli"): Promise<string> {
+    const msg: IncomingMessage = {
+      channelId,
+      userId,
+      userName: userId,
+      text,
+    };
+
+    // Rate limiting
+    if (this.rateLimiter) {
+      const limit = this.accessControl?.getRateLimit(msg.userId) ||
+        this.config.security.rateLimiting?.defaultLimit || 30;
+      const check = this.rateLimiter.check(msg.userId, limit);
+      if (!check.allowed) {
+        return `Rate limited. Try again in ${Math.ceil((check.retryAfterMs || 0) / 1000)}s.`;
+      }
+    }
+
+    const agent = this.resolveAgent(msg);
+    if (!agent) {
+      return "No agent configured.";
+    }
+
+    const convKey = `${channelId}:${userId}`;
+    const history = this.conversations.get(convKey) || [];
+
+    history.push({ role: "user", content: text, timestamp: Date.now() });
+
+    try {
+      const response = await this.runAgentLoop(agent, history);
+      history.push({ role: "assistant", content: response, timestamp: Date.now() });
+
+      const limit = agent.memory?.shortTermLimit || 50;
+      if (history.length > limit) {
+        history.splice(0, history.length - limit);
+      }
+      this.conversations.set(convKey, history);
+
+      return response;
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      this.logger.error(`Agent error: ${errorMsg}`);
+      return `Error: ${errorMsg}`;
+    }
+  }
+
   getStatus(): { plugins: string[]; agents: string[]; channels: string[]; tools: string[] } {
     return {
       plugins: [...this.plugins.keys()],

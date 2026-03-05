@@ -177,8 +177,13 @@ async function chatCommand(): Promise<void> {
       return;
     }
 
-    // Process through engine (simplified — in full implementation would use the agent loop)
-    console.log("\nMyClaw: [Processing...]\n");
+    // Process through engine
+    try {
+      const response = await engine.processMessage(input);
+      console.log(`\nMyClaw: ${response}\n`);
+    } catch (err) {
+      console.error(`\nError: ${err instanceof Error ? err.message : err}\n`);
+    }
     rl.prompt();
   });
 
@@ -200,8 +205,8 @@ async function runCommand(prompt: string): Promise<void> {
 
   console.log(`Running: ${prompt}\n`);
 
-  // In full implementation, this would run the agent loop and output the result
-  console.log("[Agent output would appear here]");
+  const response = await engine.processMessage(prompt);
+  console.log(response);
 
   await engine.shutdown();
 }
