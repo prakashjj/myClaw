@@ -21,10 +21,18 @@ const DEFAULT_SECURITY: SecurityConfig = {
   allowedPaths: [],
 };
 
+const DEFAULT_MODEL = process.env["OPENROUTER_API_KEY"]
+  ? "openrouter/anthropic/claude-sonnet-4-20250514"
+  : "anthropic/claude-sonnet-4-20250514";
+
+const DEFAULT_CHEAP_MODEL = process.env["OPENROUTER_API_KEY"]
+  ? "openrouter/anthropic/claude-haiku-4-5-20251001"
+  : "anthropic/claude-haiku-4-5-20251001";
+
 const DEFAULT_AGENT: AgentConfig = {
   id: "default",
   name: "MyClaw Assistant",
-  model: "anthropic/claude-sonnet-4-20250514",
+  model: DEFAULT_MODEL,
   systemPrompt: `You are MyClaw, a helpful AI assistant. You have access to various tools to help users accomplish tasks. Be concise, helpful, and proactive.`,
   maxTurns: 10,
   memory: {
@@ -76,8 +84,8 @@ function mergeWithDefaults(partial: Partial<MyClawConfig>): MyClawConfig {
 }
 
 function configFromEnv(): MyClawConfig {
-  const model = process.env["MYCLAW_MODEL"] || "anthropic/claude-sonnet-4-20250514";
-  const cheapModel = process.env["MYCLAW_CHEAP_MODEL"] || "anthropic/claude-haiku-4-5-20251001";
+  const model = process.env["MYCLAW_MODEL"] || DEFAULT_MODEL;
+  const cheapModel = process.env["MYCLAW_CHEAP_MODEL"] || DEFAULT_CHEAP_MODEL;
   const sandbox = (process.env["MYCLAW_SANDBOX"] as SecurityConfig["sandbox"]) || "process";
 
   return {
@@ -111,13 +119,13 @@ export function generateDefaultConfig(): string {
       {
         id: "assistant",
         name: "MyClaw Assistant",
-        model: "anthropic/claude-sonnet-4-20250514",
+        model: DEFAULT_MODEL,
         systemPrompt: "You are MyClaw, a helpful AI assistant.",
         channels: ["telegram", "discord"],
         maxTurns: 10,
         smartRouting: {
           enabled: true,
-          cheapModel: "anthropic/claude-haiku-4-5-20251001",
+          cheapModel: DEFAULT_CHEAP_MODEL,
           complexityThreshold: 0.5,
         },
         memory: {
