@@ -93,7 +93,7 @@ export class DiscordPlugin implements ChannelPlugin {
 
     switch (payload.op) {
       case 10: // Hello
-        this.startHeartbeat(payload.d.heartbeat_interval);
+        this.startHeartbeat(payload.d.heartbeat_interval as number);
         this.identify();
         break;
       case 11: // Heartbeat ACK

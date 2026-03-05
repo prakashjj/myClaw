@@ -90,7 +90,7 @@ export class BrowserToolPlugin implements ToolPlugin {
         case "browser_click":
           return this.click(args["selector"] as string);
         case "browser_type":
-          return this.type(args["selector"] as string, args["text"] as string);
+          return this.typeText(args["selector"] as string, args["text"] as string);
         case "browser_get_text":
           return this.getText(args["selector"] as string | undefined);
         case "browser_evaluate":
@@ -182,7 +182,7 @@ export class BrowserToolPlugin implements ToolPlugin {
     return result;
   }
 
-  private async type(selector: string, text: string): Promise<ToolResult> {
+  private async typeText(selector: string, text: string): Promise<ToolResult> {
     // Focus the element
     await this.evaluate(
       `document.querySelector('${selector.replace(/'/g, "\\'")}')?.focus()`

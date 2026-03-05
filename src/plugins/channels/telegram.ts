@@ -84,7 +84,7 @@ export class TelegramPlugin implements ChannelPlugin {
       });
 
       if (data.result && Array.isArray(data.result)) {
-        for (const update of data.result) {
+        for (const update of data.result as Array<{ update_id: number; message?: { text?: string; from?: { id: number; username?: string; first_name?: string }; chat: { id: number; type: string }; message_id: number } }>) {
           this.offset = update.update_id + 1;
 
           if (update.message?.text && this.handler) {
